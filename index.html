@@ -336,6 +336,10 @@ pre.code.editable:focus{border-color:var(--scope);box-shadow:0 0 0 1px var(--sco
   margin:8px 0 0 0;
 }
 .editable-hint b{color:var(--scope);}
+.run-row{display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;}
+.run-status{font-family:var(--mono);font-size:11.5px;color:var(--muted);}
+.run-status.ok{color:var(--scope);}
+.run-status.err{color:var(--red);}
 
 #audio-init-banner{
   background:var(--panel-2);
@@ -1217,10 +1221,23 @@ for (const [id, code] of Object.entries(SOURCES)){
   const pre = document.getElementById(id);
   pre.textContent = code;
   pre.dataset.original = code;
+  const expId = id.replace('-code','');
   const hint = document.createElement('p');
   hint.className = 'editable-hint';
-  hint.innerHTML = 'Click into the code above to <b>edit it</b> — your edits stay local to this page.';
+  hint.innerHTML = 'Click into the code above to <b>edit it</b>, then press Run Code to apply it to the demo above.';
   pre.insertAdjacentElement('afterend', hint);
+  const runRow = document.createElement('div');
+  runRow.className = 'run-row';
+  const runBtn = document.createElement('button');
+  runBtn.className = 'btn secondary run-code-btn';
+  runBtn.dataset.expid = expId;
+  runBtn.innerHTML = '<span class="playicon"></span>Run Code';
+  const status = document.createElement('span');
+  status.className = 'run-status';
+  status.id = expId + '-run-status';
+  runRow.appendChild(runBtn);
+  runRow.appendChild(status);
+  hint.insertAdjacentElement('afterend', runRow);
 }
 
 /* ---------------- Command Window & Workspace (reference values per experiment) ---------------- */
@@ -1504,29 +1521,40 @@ function maxVal(arrays){
 /* store computed buffers so play buttons can reuse them */
 const audioBuffers = {};
 
+/* parameters that can be re-synced from the editable Source panels */
+const AUDIO_PARAMS = { e1scale: 0.2, e2f1: 0.5, e2f2: 2, e6delay: 5000 };
+
 function buildAudioDemos(){
   const sr = originalBuffer.sampleRate;
   const origChans = getChannelsCopy(originalBuffer);
 
   // ---- Exp 1: amplitude scaling ----
   const mx1 = maxVal(origChans);
+  const scale1 = AUDIO_PARAMS.e1scale;
   const normChans = origChans.map(ch => { const o=new Float32Array(ch.length); for(let i=0;i<ch.length;i++) o[i]=ch[i]/mx1; return o; });
-  const scaledChans = normChans.map(ch => { const o=new Float32Array(ch.length); for(let i=0;i<ch.length;i++) o[i]=0.2*ch[i]; return o; });
+  const scaledChans = normChans.map(ch => { const o=new Float32Array(ch.length); for(let i=0;i<ch.length;i++) o[i]=scale1*ch[i]; return o; });
   audioBuffers['e1-orig'] = originalBuffer;
   audioBuffers['e1-norm'] = makeBuffer(normChans, sr);
   audioBuffers['e1-20'] = makeBuffer(scaledChans, sr);
   drawWaveform(document.getElementById('e1-wave-orig'), origChans[0], '#6fdc8c');
   drawWaveform(document.getElementById('e1-wave-norm'), normChans[0], '#6fdc8c');
   drawWaveform(document.getElementById('e1-wave-20'), scaledChans[0], '#6fdc8c');
+  const e1btn = document.querySelector('[data-play="e1-20"]');
+  if (e1btn && e1btn.childNodes[1]) e1btn.childNodes[1].textContent = ` ${(scale1*100).toFixed(0)}% Amplitude`;
 
   // ---- Exp 2: sampling frequency ----
+  const f1factor = AUDIO_PARAMS.e2f1, f2factor = AUDIO_PARAMS.e2f2;
   audioBuffers['e2-f'] = {buffer: originalBuffer, rate: 1};
-  audioBuffers['e2-half'] = {buffer: originalBuffer, rate: 0.5};
-  audioBuffers['e2-double'] = {buffer: originalBuffer, rate: 2};
+  audioBuffers['e2-half'] = {buffer: originalBuffer, rate: f1factor};
+  audioBuffers['e2-double'] = {buffer: originalBuffer, rate: f2factor};
   const N = originalBuffer.length;
-  const T = N/sr, T1 = N/(sr*0.5), T2 = N/(sr*2);
+  const T = N/sr, T1 = N/(sr*f1factor), T2 = N/(sr*f2factor);
   document.getElementById('e2-status').innerHTML =
-    `f = <b>${sr}</b> Hz &nbsp;·&nbsp; N = <b>${N}</b> samples &nbsp;·&nbsp; T = <b>${T.toFixed(2)}</b> s &nbsp;|&nbsp; T(0.5f) = <b>${T1.toFixed(2)}</b> s &nbsp;·&nbsp; T(2f) = <b>${T2.toFixed(2)}</b> s`;
+    `f = <b>${sr}</b> Hz &nbsp;·&nbsp; N = <b>${N}</b> samples &nbsp;·&nbsp; T = <b>${T.toFixed(2)}</b> s &nbsp;|&nbsp; T(${f1factor}f) = <b>${T1.toFixed(2)}</b> s &nbsp;·&nbsp; T(${f2factor}f) = <b>${T2.toFixed(2)}</b> s`;
+  const halfBtn = document.querySelector('[data-play="e2-half"]');
+  if (halfBtn && halfBtn.childNodes[1]) halfBtn.childNodes[1].textContent = ` Play at ${f1factor}f`;
+  const dblBtn = document.querySelector('[data-play="e2-double"]');
+  if (dblBtn && dblBtn.childNodes[1]) dblBtn.childNodes[1].textContent = ` Play at ${f2factor}f`;
 
   // ---- Exp 3: reverse ----
   const revChans = origChans.map(ch => Float32Array.from(ch).reverse());
@@ -1553,7 +1581,7 @@ function buildAudioDemos(){
   drawWaveform(document.getElementById('e5-wave-abs'), absChans[0], '#6fdc8c');
 
   // ---- Exp 6: delay & add ----
-  const d = 5000;
+  const d = Math.max(1, Math.min(originalBuffer.length-1, Math.round(AUDIO_PARAMS.e6delay)));
   const echoChans = origChans.map(ch => {
     const o = Float32Array.from(ch);
     for (let i=d; i<ch.length; i++){
@@ -1570,6 +1598,133 @@ function buildAudioDemos(){
   drawWaveform(document.getElementById('e6-wave-orig'), origChans[0], '#6fdc8c');
   drawWaveform(document.getElementById('e6-wave-echo'), echoChans[0], '#6fdc8c');
 }
+
+/* ---------------- Run Code: sync edited Source panels into the live demos ---------------- */
+function extractNum(text, regex){
+  const m = text.match(regex);
+  return m ? parseFloat(m[1]) : null;
+}
+function setStatus(expId, msg, ok){
+  const el = document.getElementById(expId+'-run-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'run-status ' + (ok ? 'ok' : 'err');
+}
+function setSlider(id, value){
+  const el = document.getElementById(id);
+  if (!el) return false;
+  el.value = value;
+  el.dispatchEvent(new Event('input'));
+  return true;
+}
+
+function runCodeExp1(){
+  if (!audioReady){ setStatus('e1', 'Audio is still loading — try again in a moment.', false); return; }
+  const src = document.getElementById('e1-code').textContent;
+  const scale = extractNum(src, /y\s*=\s*([\d.]+)\s*\*\s*y\s*;/);
+  if (scale === null || isNaN(scale)){
+    setStatus('e1', 'Could not find a line like "y = 0.2*y;" — amplitude unchanged.', false);
+    return;
+  }
+  AUDIO_PARAMS.e1scale = scale;
+  buildAudioDemos();
+  setStatus('e1', `Applied: amplitude scaled to ${scale} (${(scale*100).toFixed(0)}%). Press play to hear it.`, true);
+}
+function runCodeExp2(){
+  if (!audioReady){ setStatus('e2', 'Audio is still loading — try again in a moment.', false); return; }
+  const src = document.getElementById('e2-code').textContent;
+  const f1 = extractNum(src, /f1\s*=\s*([\d.]+)\s*\*\s*f/);
+  const f2 = extractNum(src, /f2\s*=\s*([\d.]+)\s*\*\s*f/);
+  if (f1 === null && f2 === null){
+    setStatus('e2', 'Could not find lines like "f1 = 0.5*f" / "f2 = 2*f".', false);
+    return;
+  }
+  if (f1 !== null && f1 > 0) AUDIO_PARAMS.e2f1 = f1;
+  if (f2 !== null && f2 > 0) AUDIO_PARAMS.e2f2 = f2;
+  buildAudioDemos();
+  setStatus('e2', `Applied: f1 = ${AUDIO_PARAMS.e2f1}·f, f2 = ${AUDIO_PARAMS.e2f2}·f — durations above are updated.`, true);
+}
+function runCodeExp6(){
+  if (!audioReady){ setStatus('e6', 'Audio is still loading — try again in a moment.', false); return; }
+  const src = document.getElementById('e6-code').textContent;
+  const d = extractNum(src, /\bd\s*=\s*(\d+)\s*;/);
+  if (d === null){
+    setStatus('e6', 'Could not find a line like "d = 5000;".', false);
+    return;
+  }
+  if (originalBuffer && d >= originalBuffer.length){
+    setStatus('e6', `d = ${d} is too large for this ${originalBuffer.length}-sample signal.`, false);
+    return;
+  }
+  AUDIO_PARAMS.e6delay = d;
+  buildAudioDemos();
+  setStatus('e6', `Applied: delay d = ${d} samples. Press "Delayed + Added" to hear it.`, true);
+}
+function runCodeExp7(){
+  const src = document.getElementById('e7-code').textContent;
+  const matches = [...src.matchAll(/\bd\s*=\s*(\d+)\s*;/g)];
+  if (matches.length < 2){
+    setStatus('e7', 'Could not find both the darken "d = 50;" and lighten "d = 20;" lines.', false);
+    return;
+  }
+  const dsub = parseInt(matches[0][1],10), dadd = parseInt(matches[1][1],10);
+  setSlider('e7-dsub', Math.max(0,Math.min(120,dsub)));
+  setSlider('e7-dadd', Math.max(0,Math.min(120,dadd)));
+  setStatus('e7', `Applied: darken step = ${dsub}, lighten step = ${dadd}.`, true);
+}
+function runCodeExp8(){
+  const src = document.getElementById('e8-code').textContent;
+  const d = extractNum(src, /\bd\s*=\s*(\d+)\s*;/);
+  if (d === null){
+    setStatus('e8', 'Could not find a line like "d = 100;".', false);
+    return;
+  }
+  setSlider('e8-d', Math.max(0,Math.min(255,d)));
+  setStatus('e8', `Applied: threshold d = ${d}.`, true);
+}
+function runCodeExp9(){
+  const src = document.getElementById('e9-code').textContent;
+  const mr = extractNum(src, /mRed\s*=\s*([\d.]+)/);
+  const mg = extractNum(src, /mGreen\s*=\s*([\d.]+)/);
+  const mb = extractNum(src, /mBlue\s*=\s*([\d.]+)/);
+  if (mr === null && mg === null && mb === null){
+    setStatus('e9', 'Could not find mRed / mGreen / mBlue assignments.', false);
+    return;
+  }
+  if (mr !== null) setSlider('e9-r', Math.max(0,Math.min(1,mr)));
+  if (mg !== null) setSlider('e9-g', Math.max(0,Math.min(1,mg)));
+  if (mb !== null) setSlider('e9-b', Math.max(0,Math.min(1,mb)));
+  setStatus('e9', `Applied: mRed=${mr ?? '—'}, mGreen=${mg ?? '—'}, mBlue=${mb ?? '—'}.`, true);
+}
+function runCodeExp10(){
+  const src = document.getElementById('e10-code').textContent;
+  const enh = extractNum(src, /A1\(:,:,2\)\s*=\s*A\(:,:,2\)\s*\+\s*(\d+)/);
+  const sup = extractNum(src, /A2\(:,:,2\)\s*=\s*A\(:,:,2\)\s*-\s*(\d+)/);
+  if (enh === null && sup === null){
+    setStatus('e10', 'Could not find the A1(:,:,2)=A(:,:,2)+N or A2(:,:,2)=A(:,:,2)-N lines.', false);
+    return;
+  }
+  const val = enh !== null ? enh : -sup;
+  setSlider('e10-g', Math.max(-150,Math.min(150,val)));
+  const note = (enh !== null && sup !== null) ? ' (only one delta shows at a time — edit just one number to see its effect)' : '';
+  setStatus('e10', `Applied green Δ = ${val}${note}.`, true);
+}
+function runCodeNoop(expId){
+  setStatus(expId, 'This script has no editable numeric parameter — every value here is fixed, so the demo above already shows exactly what it produces.', true);
+}
+const RUN_HANDLERS = {
+  e1: runCodeExp1, e2: runCodeExp2, e3: () => runCodeNoop('e3'),
+  e4: () => runCodeNoop('e4'), e5: () => runCodeNoop('e5'), e6: runCodeExp6,
+  e7: runCodeExp7, e8: runCodeExp8, e9: runCodeExp9, e10: runCodeExp10,
+  e11: () => runCodeNoop('e11')
+};
+document.querySelectorAll('.run-code-btn').forEach(btn => {
+  const expId = btn.dataset.expid;
+  btn.addEventListener('click', () => {
+    const handler = RUN_HANDLERS[expId];
+    if (handler) handler();
+  });
+});
 
 document.querySelectorAll('[data-play]').forEach(btn => {
   btn.addEventListener('click', () => {
